@@ -1,0 +1,305 @@
+---
+title: "Present"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+
+library(readr)
+library(lme4)
+library(dplyr)
+library(car)
+library(devtools)
+library(ggplot2)
+library(redres)
+library(influence.ME)
+
+setwd('/Users/Daniel/Dropbox (HMS)/Hyperthyroid/hyperData/Physiology/MATLAB')
+PhysioStack <-read_csv('PhysioStack.csv')
+
+tempTable=PhysioStack %>%select(Master_ID,Genotype,Sex_M_F_,Condition_H_C_,AgeAtExp_InjectionStart_days_,Day,percTemp)
+Day3Temps=subset(tempTable, Day==0| Day==1| Day==2| Day==3)
+
+#start with just condition removed
+Temp_Cond3.model=lmer(percTemp ~ Sex_M_F_ + Genotype + AgeAtExp_InjectionStart_days_ +Condition_H_C_+Day + (1 | Master_ID),Day3Temps,REML=FALSE)
+summary(Temp_Cond3.model)
+
+Temp_Cond3null.model=lmer(percTemp ~Sex_M_F_ + Genotype + AgeAtExp_InjectionStart_days_ +Day + (1 | Master_ID),Day3Temps,REML=FALSE)
+summary(Temp_Cond3null.model)
+
+anova(Temp_Cond3null.model,Temp_Cond3.model) # 0.004558
+
+Day3Temps$Master_ID = as.factor(Day3Temps$Master_ID)
+Day3Temps$Genotype = as.factor(Day3Temps$Genotype)
+Day3Temps$Sex_M_F_ = as.factor(Day3Temps$Sex_M_F_)
+Day3Temps$Condition_H_C_ = as.factor(Day3Temps$Condition_H_C_)
+Day3Temps$DaySqr = Day3Temps$Day^2
+
+#Try Condition.Day
+Temp_CondDay3.model=lmer(percTemp ~ Sex_M_F_ + Genotype + AgeAtExp_InjectionStart_days_ +Condition_H_C_*Day + (1 | Master_ID),Day3Temps,REML=FALSE)
+summary(Temp_CondDay3.model)
+
+Temp_CondDay3null.model=lmer(percTemp ~ Sex_M_F_ + Genotype + AgeAtExp_InjectionStart_days_ +Condition_H_C_ + Day + (1 | Master_ID),Day3Temps,REML=FALSE)
+summary(Temp_CondDay3null.model)
+
+anova(Temp_CondDay3null.model,Temp_CondDay3.model) #0.003662
+
+
+#Try Adding DaySqr term
+Temp_CondDay3.model=lmer(percTemp ~ Sex_M_F_ + Genotype + AgeAtExp_InjectionStart_days_ +Condition_H_C_*DaySqr + Condition_H_C_*Day + (1 | Master_ID),Day3Temps,REML=FALSE)
+summary(Temp_CondDay3.model)
+
+Temp_CondDay3null.model=lmer(percTemp ~ Sex_M_F_ + Genotype + AgeAtExp_InjectionStart_days_ +Condition_H_C_*Day + DaySqr + (1 | Master_ID),Day3Temps,REML=FALSE)
+summary(Temp_CondDay3null.model)
+
+anova(Temp_CondDay3null.model, Temp_CondDay3.model) #0.04
+
+
+#plot and save the residual plot
+pdf(file = "/Users/hannahfarnsworth/Dropbox (HMS)/hyperData/Physiology/R Analysis/Figures/PercTempResDot.pdf")
+plot_redres(Temp_CondDay3.model)
+dev.off()
+
+#find influential values and save the cook plot
+influenDayCond <- influence(Temp_CondDay3.model, group="Master_ID")
+y=cooks.distance.estex(influenDayCond, sort=TRUE) 
+x=subset(y,y>.02) #H66 H67 H221 is the outlier
+
+pdf(file = "/Users/hannahfarnsworth/Dropbox (HMS)/hyperData/Physiology/R Analysis/Figures/PercTempRCook.pdf")
+plot(influenDayCond, which = "cook")
+dev.off()
+
+
+#take out influential values and run the anova
+Temp_CondDay3.infmodel <- exclude.influence(Temp_CondDay3.model, "Master_ID", level=c("H66","H67","H221"), delete=TRUE)
+Temp_CondDay3null.infmodel <- exclude.influence(Temp_Cond3null.model, "Master_ID", level=c("H66","H67","H221"), delete=TRUE) 
+
+anova(Temp_CondDay3null.infmodel,Temp_CondDay3.infmodel) #0.0001348
+
+#save the new residual plot
+pdf(file = "/Users/hannahfarnsworth/Dropbox (HMS)/hyperData/Physiology/R Analysis/Figures/PercTempResDotInf.pdf")
+plot_redres(Temp_CondDay3.infmodel)
+dev.off()
+
+#Make plots
+
+Day3MiceTemp<-subset(Day3Temps,Day3Temps$percTemp!="NaN") #have to take out NaNs from table so we can add residuals to the same table (with them the values would be different lengths)
+Day3MiceTemp$residualsI<-residuals(Temp_CondDay3.model)
+
+Day3MiceTempinf<-subset(Day3MiceTemp,Day3MiceTemp$Master_ID!='H221') #take out IDs
+Day3MiceTempinf<-subset(Day3MiceTempinf,Day3MiceTempinf$Master_ID!="H67")
+Day3MiceTempinf<-subset(Day3MiceTempinf,Day3MiceTempinf$Master_ID!="H66")
+Day3MiceTempinf$residualsII<-residuals(Temp_CondDay3.infmodel)
+
+#histrogram of percTemp
+g.perctemp <- ggplot(Day3MiceTempinf, aes(Day3MiceTempinf$percTemp, fill=as.factor(Day3MiceTempinf$Condition_H_C_),color=Day3MiceTempinf$Condition_H_C_))
+g.perctemp+geom_histogram(binwidth=0.5,alpha = 0.5,position="identity")+labs( x = "Perc Temp", y = "Count",fill="Condition",main="PercWeight Histogram")+theme(legend.key = element_rect(fill = NA, color = c("#56B4E9","#E69F00")))+guides(color = FALSE)+theme_set(theme_bw(base_size =16))+scale_fill_manual(values = c("#56B4E9","#E69F00"))+scale_color_manual(values = c("#56B4E9","#E69F00"))+theme( panel.border = element_blank(),axis.line = element_line(colour = "black"))
+
+ggsave("PercTempHistogramInfbw.pdf",path='/Users/hannahfarnsworth/Dropbox (HMS)/hyperData/Physiology/R Analysis/')
+
+#Make a histogram of residuals after removing the threeIDs
+g.perctempres <- ggplot(Day3MiceTempinf, aes(Day3MiceTempinf$residualsII, fill=as.factor(Day3MiceTempinf$Condition_H_C_),color=Day3MiceTempinf$Condition_H_C_))
+g.perctempres+geom_histogram(binwidth=0.5,alpha = 0.5,position="identity")+labs( x = "Residuals", y = "Count",fill="Condition",main="PercWeight Histogram")+theme(legend.key = element_rect(fill = NA, color = c("#56B4E9","#E69F00")))+guides(color = FALSE)+theme_set(theme_bw(base_size = 16))+scale_fill_manual(values = c("#56B4E9","#E69F00"))+scale_color_manual(values = c("#56B4E9","#E69F00"))+theme( panel.border = element_blank(),axis.line = element_line(colour = "black"))
+
+ggsave("PercTempResidInfbw.pdf",path='/Users/hannahfarnsworth/Dropbox (HMS)/hyperData/Physiology/R Analysis/')
+
+#make a histrogram of the original model residuals
+g.perctempresI <- ggplot(Day3MiceTemp, aes(Day3MiceTemp$residualsI, fill=as.factor(Day3MiceTemp$Condition_H_C_),color=Day3MiceTemp$Condition_H_C_))
+g.perctempresI+geom_histogram(binwidth=0.5,alpha = 0.2,position="identity")+labs( x = "Residuals", y = "Count",fill="Condition",main="PercWeight Histogram")+theme(legend.key = element_rect(fill = NA, color = c("#56B4E9","#E69F00")))+guides(color = FALSE)+theme_set(theme_bw(base_size =16))+scale_fill_manual(values = c("#56B4E9","#E69F00"))+scale_color_manual(values = c("#56B4E9","#E69F00"))+theme( panel.border = element_blank(),axis.line = element_line(colour = "black"))
+
+ggsave("PercTempResidFullBw.pdf",path='/Users/hannahfarnsworth/Dropbox (HMS)/hyperData/Physiology/R Analysis/')
+
+
+
+##WEIGHTTTT
+
+##start with Percweight
+weightTable=PhysioStack %>%select(Master_ID,Genotype,Sex_M_F_,Condition_H_C_,AgeAtExp_InjectionStart_days_,Day,percWeight,Food)
+
+Day3Weights=subset(weightTable, Day==0| Day==1| Day==2| Day==3)
+
+#Show Condition.Day First
+Weight_DayCond3.model=lmer(percWeight ~ Sex_M_F_ + Genotype + AgeAtExp_InjectionStart_days_ +Condition_H_C_*Day + (1 | Master_ID),Day3Weights,REML=FALSE)
+summary(Weight_DayCond3.model)
+
+Weight_DayCond3null.model=lmer(percWeight ~ Condition_H_C_ + Sex_M_F_ + Genotype + AgeAtExp_InjectionStart_days_ +Day + (1 | Master_ID),Day3Weights,REML=FALSE)
+
+anova(Weight_DayCond3null.model,Weight_DayCond3.model) #0.08323
+
+#Put Both together
+Weight_SexDayCond3.model=lmer(percWeight ~ Condition_H_C_*Sex_M_F_*Day + Genotype + AgeAtExp_InjectionStart_days_ + (1 | Master_ID),Day3Weights,REML=FALSE)
+summary(Weight_SexDayCond3.model)
+
+Weight_SexDayCond3null.model=lmer(percWeight ~ Condition_H_C_*Day + Genotype + AgeAtExp_InjectionStart_days_ +Condition_H_C_*Sex_M_F_ + Sex_M_F_*Day + (1 | Master_ID),Day3Weights,REML=FALSE)
+summary(Weight_SexDayCond3null.model)
+
+anova(Weight_SexDayCond3null.model,Weight_SexDayCond3.model) #0.0001257
+
+#Save the residual plot
+pdf(file = "/Users/hannahfarnsworth/Dropbox (HMS)/hyperData/Physiology/R Analysis/Figures/PercWeightResDotFullpdf")
+plot_redres(Weight_SexDayCond3.model)
+dev.off()
+
+#find influential IDs and save the cook plot
+influenDaySex <- influence(Weight_SexDayCond3.model, group="Master_ID")
+y=cooks.distance.estex(influenDaySex, sort=TRUE) 
+x=subset(y,y>.4)
+
+pdf(file = "/Users/hannahfarnsworth/Dropbox (HMS)/hyperData/Physiology/R Analysis/Figures/WeightCookResDotFullpdf")
+plot(influenDaySex, which = "cook") #only one extreme outlier about 0.4
+dev.off()
+
+#take the ID out
+Weight_SexDayCond3.infmodel <- exclude.influence(Weight_SexDayCond3.model, "Master_ID", level=c("H213"), delete=TRUE)
+
+Weight_SexDayCond3null.infmodel <- exclude.influence(Weight_SexDayCond3null.model, "Master_ID", level=c("H213"), delete=TRUE)
+
+anova(Weight_SexDayCond3null.infmodel,Weight_SexDayCond3.infmodel) #0.01491 worse??
+
+#save the new residual plot
+pdf(file = "/Users/hannahfarnsworth/Dropbox (HMS)/hyperData/Physiology/R Analysis/Figures/PercWeightResDotInf.pdf")
+plot_redres(Weight_SexDayCond3.infmodel)
+dev.off()
+
+
+#Plot original Perc Weight in Histogram
+g.percweight <- ggplot(Day3Weights, aes(Day3Weights$percWeight, fill=as.factor(Day3Weights$Condition_H_C_),color=Day3Weights$Condition_H_C_))
+g.percweight+geom_histogram(binwidth=0.5,alpha = 0.5,position="identity")+labs( x = "Perc Weight", y = "Count",fill="Condition",main="PercWeight Histogram")+theme(legend.key = element_rect(fill = NA, color = c("#56B4E9","#E69F00")))+guides(color = FALSE)+scale_fill_manual(values = c("#56B4E9","#E69F00"))+scale_color_manual(values = c("#56B4E9","#E69F00"))+theme( panel.border = element_blank(),axis.line = element_line(colour = "black"))
+
+ggsave("PercWeightHistogramFull.pdf",path='/Users/hannahfarnsworth/Dropbox (HMS)/hyperData/Physiology/R Analysis/Figures')
+
+
+#get residuals as a column so we can make a histogram of the residuals and make sure we arent biasing the model data based on condition (this is the original model)
+
+#first we have to subset out NaN's since the model doesn't use them
+Day3MiceWeight<-subset(Day3Weights,Day3Weights$percWeight!="NaN")
+Day3MiceWeight$residuals<-residuals(Weight_SexDayCond3.model)
+
+#histogram of original residuals
+g.percweight <- ggplot(Day3MiceWeight, aes(Day3MiceWeight$residuals, fill=as.factor(Day3MiceWeight$Condition_H_C_),color=Day3MiceWeight$Condition_H_C_))
+g.percweight+geom_histogram(binwidth=0.5,alpha = 0.5,position="identity")+labs( x = "Original Perc Weight", y = "Residual",fill="Condition",main="PercWeight Histogram")+theme(legend.key = element_rect(fill = NA, color = c("#56B4E9","#E69F00")))+guides(color = FALSE)+scale_fill_manual(values = c("#56B4E9","#E69F00"))+scale_color_manual(values = c("#56B4E9","#E69F00"))+theme( panel.border = element_blank(),axis.line = element_line(colour = "black"))
+
+ggsave("PercWeightResidualsFull.pdf",path='/Users/hannahfarnsworth/Dropbox (HMS)/hyperData/Physiology/R Analysis/Figures')
+
+Day3MiceWeightinf<-subset(Day3MiceWeight,Day3MiceWeight$Master_ID!="H213")
+Day3MiceWeightinf$residualsII<-residuals(Weight_SexDayCond3.infmodel)
+
+#histograms of residuals without influential IDs
+g.percweightI <- ggplot(Day3MiceWeightinf, aes(Day3MiceWeightinf$residuals, fill=as.factor(Day3MiceWeightinf$Condition_H_C_),color=Day3MiceWeightinf$Condition_H_C_))
+g.percweight+geom_histogram(binwidth=0.5,alpha = 0.5)+labs( x = "Perc Weight", y = "Residual",fill="Condition",main="New PercWeight Histogram")+theme(legend.key = element_rect(fill = NA, color = c("#56B4E9","#E69F00")))+guides(color = FALSE)+scale_fill_manual(values = c("#56B4E9","#E69F00"))+scale_color_manual(values = c("#56B4E9","#E69F00"))+theme( panel.border = element_blank(),axis.line = element_line(colour = "black"))
+
+ggsave("PercWeightResidualsInf.pdf",path='/Users/hannahfarnsworth/Dropbox (HMS)/hyperData/Physiology/R Analysis/Figures/Weight')
+
+
+#now look at start weight 
+
+#need to add Food to the table
+weightTable2=PhysioStack %>%select(Master_ID,Genotype,Sex_M_F_,Condition_H_C_,AgeAtExp_InjectionStart_days_,Day,percWeight,baselineWeight)
+
+#only care about these days
+Day3Weights2=subset(weightTable2, Day==0| Day==1| Day==2| Day==3)
+
+#get start weight Food and Master IDs from this Table and make a new one
+# StartWeights<-(subset(Day3Weights2$baselineWeight,Day3Weights2$Day==0))
+# Master_IDs<-unique(Day3Weights2$Master_ID)
+#  StartTable<-data.frame("Master_ID"=Master_IDs,"StartWeight"=StartWeights) 
+# 
+# #make master ids the common intersect of the original table and start table
+# common_col_names <- intersect(names(Day3Weights2), names(StartTable))
+# 
+# #merge the original tables and the start weights y master id...will repeat the values
+# Day3WeightsMerged=merge(Day3Weights,StartTable, by=common_col_names, all.Master_IDs=TRUE)
+# newdata <- Day3WeightsMerged[order(Master_IDs,)]
+
+##the master IDs are all there just in a weird order
+
+#model
+Weight_Start5null.model=lmer(percWeight ~ Condition_H_C_ *Day*baselineWeight + Genotype + AgeAtExp_InjectionStart_days_ + Sex_M_F_ + (1| Master_ID),Day3Weights2,REML=FALSE)
+summary(Weight_Start5null.model)
+
+Weight_Start5.model=lmer(percWeight ~ Condition_H_C_ *Sex_M_F_*Day + Genotype + AgeAtExp_InjectionStart_days_ + baselineWeight + (1| Master_ID),Day3Weights2,REML=FALSE)
+summary(Weight_Start5.model)
+
+anova(Weight_Start5null.model,Weight_Start5.model)
+
+
+##NOW FOOD
+
+foodTable=PhysioStack %>%select(Master_ID,Genotype,Sex_M_F_,Condition_H_C_,AgeAtExp_InjectionStart_days_,Day,percFood)
+
+Day3Food=subset(foodTable, Day==0| Day==1| Day==2| Day==3)
+
+#model condition*day
+Food_CondDay3.model=lmer(percFood ~ Sex_M_F_ + Genotype + AgeAtExp_InjectionStart_days_ +Condition_H_C_*Day + (1 | Master_ID),Day3Food,REML=FALSE)
+
+Food_CondDay3null.model=lmer(percFood ~ Sex_M_F_ + Genotype + AgeAtExp_InjectionStart_days_ +Condition_H_C_+Day + (1 | Master_ID),Day3Food,REML=FALSE)
+
+anova(Food_CondDay3null.model,Food_CondDay3.model)
+
+
+#save the residual plot
+pdf(file = "/Users/hannahfarnsworth/Dropbox (HMS)/hyperData/Physiology/R Analysis/Figures/PercTempResDotFull.pdf")
+plot_redres(Food_CondDay3.model)
+dev.off()
+
+#find influential points and save the cook plot
+influenFood <- influence(Food_CondDay3.model, group="Master_ID")
+y=cooks.distance.estex(influenFood , sort=TRUE) 
+x=subset(y,y>.2) #H205 is the outlier
+
+pdf(file = "/Users/hannahfarnsworth/Dropbox (HMS)/hyperData/Physiology/R Analysis/Figures/PercFoodCook.pdf")
+plot(influenFood , which = "cook") #only one about 0.2
+dev.off()
+
+
+#make a model without the ID
+Food_CondDay3.infmodel <- exclude.influence(Food_CondDay3.model, "Master_ID", level=c("H205"), delete=TRUE)
+
+pdf(file = "/Users/hannahfarnsworth/Dropbox (HMS)/hyperData/Physiology/R Analysis/Figures/PercFoodResDotInf.pdf")
+plot_redres(Food_CondDay3.infmodel)
+dev.off()
+
+#make a null model without the value
+Food_CondDay3null.infmodel <- exclude.influence(Food_CondDay3null.model, "Master_ID", level=c("H205"), delete=TRUE)
+
+anova(Food_CondDay3null.infmodel,Food_CondDay3.infmodel) #9.594e-09
+
+#plot
+Day3MiceFood<-subset(Day3Food,Day3Food$percFood!="NaN")
+Day3MiceFood$residuals<-residuals(Food_CondDay3.model)
+
+g.percfoodres <- ggplot(Day3MiceFood, aes(Day3MiceFood$residuals, fill=as.factor(Day3MiceFood$Condition_H_C_),color=Day3MiceFood$Condition_H_C_))
+g.percweight+geom_histogram(binwidth=0.5,alpha = 0.5)+labs( x = "Residuals", y = "Count",fill="Condition",main="PercWeight Histogram")+theme(legend.key = element_rect(fill = NA, color = c("#56B4E9","#E69F00")))+guides(color = FALSE)+scale_fill_manual(values = c("#56B4E9","#E69F00"))+scale_color_manual(values = c("#56B4E9","#E69F00"))+theme( panel.border = element_blank(),axis.line = element_line(colour = "black"))
+
+ggsave("PercWeightResidualsFull.pdf",path='/Users/hannahfarnsworth/Dropbox (HMS)/hyperData/Physiology/R Analysis/Figures/Food')
+
+Day3MiceFoodinf<-subset(Day3MiceFood,Day3MiceFood$Master_ID!="H205")
+
+Day3MiceFoodinf$residualsII<-residuals(Food_CondDay3.infmodel)
+
+
+g.percfoodres <- ggplot(Day3MiceFoodinf, aes(Day3MiceFoodinf$residualsII, fill=as.factor(Day3MiceFoodinf$Condition_H_C_),color=Day3MiceFoodinf$Condition_H_C_))
+g.percweight+geom_histogram(binwidth=0.5,alpha = 0.5)+labs( x = "Residuals", y = "Count",fill="Condition",main="PercWeight Histogram")+theme(legend.key = element_rect(fill = NA, color = c("#56B4E9","#E69F00")))+guides(color = FALSE)+scale_fill_manual(values = c("#56B4E9","#E69F00"))+scale_color_manual(values = c("#56B4E9","#E69F00"))+theme( panel.border = element_blank(),axis.line = element_line(colour = "black"))
+
+ggsave("PercFoodResidualsInf.pdf",path='/Users/hannahfarnsworth/Dropbox (HMS)/hyperData/Physiology/R Analysis/Figures/Food')
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+summary(cars)
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
